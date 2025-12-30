@@ -31,16 +31,6 @@ with st.sidebar:
     # 提示文字
     st.caption("请上传你的文档，我会基于它回答问题。")
     
-    # API Key 输入框
-    st.divider()
-    st.header("🔑 API 配置")
-    api_key = st.text_input(
-        "DeepSeek API Key",
-        type="password",
-        help="请输入 DeepSeek API Key",
-        placeholder="sk-..."
-    )
-    
     # 如果上传了文件，显示文件信息
     if uploaded_file is not None:
         st.success(f"✅ 已上传: {uploaded_file.name}")
@@ -48,6 +38,13 @@ with st.sidebar:
 
 # 主区域
 st.divider()
+
+# 从 Streamlit Secrets 读取 API Key
+try:
+    api_key = st.secrets["DEEPSEEK_API_KEY"]
+except KeyError:
+    api_key = None
+    st.error("⚠️ 管理员未配置密钥")
 
 # PDF 解析逻辑
 if uploaded_file is not None:
@@ -88,7 +85,7 @@ user_question = st.chat_input("向文档提问...")
 if user_question:
     # 检查 API Key
     if not api_key:
-        st.warning("⚠️ 请先在左侧输入 API Key")
+        st.warning("⚠️ 管理员未配置密钥")
     # 检查文档内容是否存在
     elif "document_text" not in st.session_state or not st.session_state.document_text:
         st.warning("⚠️ 请先上传并解析 PDF 文档")
