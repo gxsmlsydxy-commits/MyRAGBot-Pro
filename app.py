@@ -1,6 +1,9 @@
 import streamlit as st
 from PyPDF2 import PdfReader
 from openai import OpenAI
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import HuggingFaceEmbeddings
 
 # 页面配置
 st.set_page_config(
@@ -46,32 +49,41 @@ except KeyError:
     api_key = None
     st.error("⚠️ 管理员未配置密钥")
 
-# PDF 解析逻辑
+# PDF 解析和向量化逻辑
 if uploaded_file is not None:
     try:
-        # 读取 PDF 文件
-        pdf_reader = PdfReader(uploaded_file)
-        
-        # 提取所有文本内容
-        text = ""
-        for page in pdf_reader.pages:
-            text += page.extract_text()
-        
-        # 将文本保存到 session_state，供后续使用
-        st.session_state.document_text = text
-        
-        # 显示成功提示
-        st.success(f"✅ 成功读取文档！共检测到 {len(text)} 个字符。")
-        
-        # 显示文档内容预览（前 1000 个字符）
-        with st.expander("查看文档内容"):
-            preview_text = text[:1000] if len(text) > 1000 else text
-            st.text(preview_text)
-            if len(text) > 1000:
-                st.caption(f"（仅显示前 1000 个字符，文档共 {len(text)} 个字符）")
+        with st.spinner("正在分析文档..."):
+            # 读取 PDF 文件
+            pdf_reader = PdfReader(uploaded_file)
+            
+            # 提取所有文本内容
+            text = ""
+            for page in pdf_reader.pages:
+                text += page.extract_text()
+            
+            # 文本切片
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=500,
+                chunk_overlap=50
+            )
+            chunks = text_splitter.split_text(text)
+            
+            # 向量化
+            embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2"
+            )
+            
+            # 创建向量索引
+            vectorstore = FAISS.from_texts(chunks, embeddings)
+            
+            # 保存到 session_state，防止刷新丢失
+            st.session_state.vectorstore = vectorstore
+            
+            # 显示成功提示
+            st.success(f"✅ 成功建立索引！文档已切分为 {len(chunks)} 个片段。")
     
     except Exception as e:
-        st.error(f"❌ 读取 PDF 文件时出错: {str(e)}")
+        st.error(f"❌ 处理文档时出错: {str(e)}")
 
 # 显示历史聊天记录
 for message in st.session_state.messages:
@@ -81,13 +93,13 @@ for message in st.session_state.messages:
 # 聊天输入框
 user_question = st.chat_input("向文档提问...")
 
-# RAG 问答逻辑
+# RAG 问答逻辑（向量检索模式）
 if user_question:
     # 检查 API Key
     if not api_key:
         st.warning("⚠️ 管理员未配置密钥")
-    # 检查文档内容是否存在
-    elif "document_text" not in st.session_state or not st.session_state.document_text:
+    # 检查向量库是否存在
+    elif "vectorstore" not in st.session_state:
         st.warning("⚠️ 请先上传并解析 PDF 文档")
     else:
         try:
@@ -98,15 +110,21 @@ if user_question:
             with st.chat_message("user"):
                 st.write(user_question)
             
+            # 向量检索：找出最相关的 3 个片段
+            vectorstore = st.session_state.vectorstore
+            relevant_chunks = vectorstore.similarity_search(user_question, k=3)
+            
+            # 构建 Context：拼接检索到的片段
+            context = "\n\n".join([chunk.page_content for chunk in relevant_chunks])
+            
+            # 构建 Prompt
+            prompt = f"基于以下参考片段回答问题：\n\n{context}\n\n问题：{user_question}"
+            
             # 初始化 OpenAI 客户端（适配 DeepSeek）
             client = OpenAI(
                 api_key=api_key,
                 base_url="https://api.deepseek.com"
             )
-            
-            # 构建 RAG Prompt（每次都要带上 PDF 内容作为背景知识）
-            text = st.session_state.document_text
-            prompt = f"你是一个智能助手。请基于以下文档内容回答用户问题。\n\n文档内容：{text}\n\n用户问题：{user_question}"
             
             # 调用 DeepSeek API
             with st.chat_message("assistant"):
