@@ -1,3 +1,20 @@
+# --- 强制安装依赖 (Magic Patch) ---
+import subprocess
+import sys
+
+def install_packages():
+    packages = [
+        "langchain", "langchain-community", "langchain-huggingface",
+        "faiss-cpu", "sentence-transformers", "huggingface-hub"
+    ]
+    for package in packages:
+        try:
+            __import__(package.replace("-", "_"))
+        except ImportError:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+install_packages()
+# --------------------------------
 import streamlit as st
 from PyPDF2 import PdfReader
 from openai import OpenAI
